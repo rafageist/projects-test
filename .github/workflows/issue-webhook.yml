@@ -50,6 +50,14 @@ jobs:
             exit 1
           fi
           
+          # Basic JWT format validation (should have 3 parts separated by dots)
+          token_parts=$(echo "$token" | tr '.' '\n' | wc -l)
+          if [ "$token_parts" -ne 3 ]; then
+            echo "Error: Token does not appear to be a valid JWT (expected 3 parts, got $token_parts)"
+            echo "Token: $token"
+            exit 1
+          fi
+          
           echo "Login successful, token received"
           
           # Step 2: Send issue to API with token
@@ -77,9 +85,11 @@ jobs:
             echo "Error: API request failed with status code $issue_http_code"
             # Attempt logout even on failure
             echo "Attempting logout..."
-            curl -s --max-time 30 -X POST https://api.vvm.sr/logout \
+            logout_response_failure=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST https://api.vvm.sr/logout \
               -H "Authorization: Bearer $token" \
-              -H "Content-Type: application/json"
+              -H "Content-Type: application/json")
+            logout_code_failure=$(echo "$logout_response_failure" | tail -n1)
+            echo "Logout attempt status code: $logout_code_failure"
             exit 1
           fi
           
