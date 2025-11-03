@@ -1,0 +1,31 @@
+name: Issue Webhook
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  notify-api:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send issue to API
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST https://api.vvm.sr/project/issue \
+            -H "Content-Type: application/json" \
+            -H "x-vvm-organization: ${{ secrets.VVM_ORGANIZATION_ID }}" \
+            -H "x-vvm-environment: prod" \
+            -H "x-vvm-version: latest" \
+            -d "{\"title\": $(echo '${{ github.event.issue.title }}' | jq -Rs .), \"body\": $(echo '${{ github.event.issue.body }}' | jq -Rs .)}")
+          
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          
+          echo "HTTP Status Code: $http_code"
+          echo "Response Body: $body"
+          
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "Error: API request failed with status code $http_code"
+            exit 1
+          fi
+          
+          echo "Issue successfully sent to API"
