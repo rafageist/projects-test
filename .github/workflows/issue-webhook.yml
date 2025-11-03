@@ -1,0 +1,115 @@
+name: Issue Webhook
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  notify-api:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Send issue to API
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          VVM_ORG_ID: ${{ secrets.VVM_ORGANIZATION_ID }}
+          VVM_API_KEY: ${{ secrets.VVM_API_KEY }}
+          VVM_USERNAME: ${{ secrets.VVM_USERNAME }}
+        run: |
+          # Step 1: Login to get JWT token
+          echo "Logging in to API..."
+          login_payload=$(jq -n \
+            --arg api_key "$VVM_API_KEY" \
+            --arg username "$VVM_USERNAME" \
+            --arg org "$VVM_ORG_ID" \
+            '{api_key: $api_key, username: $username, org: $org}')
+          
+          login_response=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST https://api.vvm.sr/login \
+            -H "Content-Type: application/json" \
+            -d "$login_payload")
+          
+          login_http_code=$(echo "$login_response" | tail -n1)
+          login_body=$(echo "$login_response" | sed '$d')
+          
+          echo "Login HTTP Status Code: $login_http_code"
+          
+          if [ "$login_http_code" -lt 200 ] || [ "$login_http_code" -ge 300 ]; then
+            echo "Error: Login failed with status code $login_http_code"
+            echo "Response: $login_body"
+            exit 1
+          fi
+          
+          # Extract token from login response
+          token=$(echo "$login_body" | jq -r '.token')
+          
+          if [ -z "$token" ] || [ "$token" = "null" ]; then
+            echo "Error: Failed to extract token from login response"
+            echo "Response: $login_body"
+            exit 1
+          fi
+          
+          # Basic JWT format validation (should have 3 parts separated by dots)
+          token_parts=$(echo "$token" | tr '.' '\n' | wc -l)
+          if [ "$token_parts" -ne 3 ]; then
+            echo "Error: Token does not appear to be a valid JWT (expected 3 parts, got $token_parts)"
+            echo "Token: $token"
+            exit 1
+          fi
+          
+          echo "Login successful, token received"
+          
+          # Step 2: Send issue to API with token
+          echo "Sending issue to API..."
+          issue_payload=$(jq -n \
+            --arg title "$ISSUE_TITLE" \
+            --arg body "$ISSUE_BODY" \
+            '{title: $title, body: $body}')
+          
+          issue_response=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST https://api.vvm.sr/project/issue \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $token" \
+            -H "x-vvm-organization: $VVM_ORG_ID" \
+            -H "x-vvm-environment: prod" \
+            -H "x-vvm-version: latest" \
+            -d "$issue_payload")
+          
+          issue_http_code=$(echo "$issue_response" | tail -n1)
+          issue_body=$(echo "$issue_response" | sed '$d')
+          
+          echo "Issue HTTP Status Code: $issue_http_code"
+          echo "Response Body: $issue_body"
+          
+          if [ "$issue_http_code" -lt 200 ] || [ "$issue_http_code" -ge 300 ]; then
+            echo "Error: API request failed with status code $issue_http_code"
+            # Attempt logout even on failure
+            echo "Attempting logout..."
+            logout_response_failure=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST https://api.vvm.sr/logout \
+              -H "Authorization: Bearer $token" \
+              -H "Content-Type: application/json")
+            logout_code_failure=$(echo "$logout_response_failure" | tail -n1)
+            echo "Logout attempt status code: $logout_code_failure"
+            exit 1
+          fi
+          
+          echo "Issue successfully sent to API"
+          
+          # Step 3: Logout
+          echo "Logging out..."
+          logout_response=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST https://api.vvm.sr/logout \
+            -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/json")
+          
+          logout_http_code=$(echo "$logout_response" | tail -n1)
+          logout_body=$(echo "$logout_response" | sed '$d')
+          
+          echo "Logout HTTP Status Code: $logout_http_code"
+          
+          if [ "$logout_http_code" -lt 200 ] || [ "$logout_http_code" -ge 300 ]; then
+            echo "Warning: Logout failed with status code $logout_http_code"
+            echo "Response: $logout_body"
+            # Don't fail the action on logout failure
+          else
+            echo "Logout successful"
+          fi
