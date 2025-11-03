@@ -9,13 +9,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Send issue to API
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          VVM_ORG_ID: ${{ secrets.VVM_ORGANIZATION_ID }}
         run: |
-          response=$(curl -s -w "\n%{http_code}" -X POST https://api.vvm.sr/project/issue \
+          payload=$(jq -n \
+            --arg title "$ISSUE_TITLE" \
+            --arg body "$ISSUE_BODY" \
+            '{title: $title, body: $body}')
+          
+          response=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST https://api.vvm.sr/project/issue \
             -H "Content-Type: application/json" \
-            -H "x-vvm-organization: ${{ secrets.VVM_ORGANIZATION_ID }}" \
+            -H "x-vvm-organization: $VVM_ORG_ID" \
             -H "x-vvm-environment: prod" \
             -H "x-vvm-version: latest" \
-            -d "{\"title\": $(echo '${{ github.event.issue.title }}' | jq -Rs .), \"body\": $(echo '${{ github.event.issue.body }}' | jq -Rs .)}")
+            -d "$payload")
           
           http_code=$(echo "$response" | tail -n1)
           body=$(echo "$response" | sed '$d')
